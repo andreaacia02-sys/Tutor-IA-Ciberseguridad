@@ -5,18 +5,16 @@ import glob
 import hashlib
 from datetime import datetime
 from dotenv import load_dotenv
+import pandas as pd
 
 # Cargar variables de entorno
 load_dotenv("clave.env")
 
-from langchain_community.document_loaders import PyPDFLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnablePassthrough
-from langchain_core.output_parsers import StrOutputParser
+api_key_env = os.getenv("GOOGLE_API_KEY")
+if not api_key_env:
+    print("Error crítico: GOOGLE_API_KEY no encontrada en clave.env")
+    st.error("Error de configuración del servidor.")
+    st.stop()
 
 st.set_page_config(page_title="Tutor IA: Ciberseguridad", page_icon="🛡️")
 
@@ -35,6 +33,11 @@ def init_db():
             password TEXT NOT NULL
         )
     ''')
+    # Añadir columna rol si no existe (Migración)
+    try:
+        cursor.execute("ALTER TABLE usuarios ADD COLUMN rol TEXT DEFAULT 'alumno'")
+    except sqlite3.OperationalError:
+        pass # La columna ya existe
     # Crear tabla de historial
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS historial (
@@ -69,7 +72,7 @@ def authenticate_user(email, password):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     hashed_pwd = hash_password(password)
-    cursor.execute('SELECT id, nombre FROM usuarios WHERE email=? AND password=?', (email, hashed_pwd))
+    cursor.execute('SELECT id, nombre, rol FROM usuarios WHERE email=? AND password=?', (email, hashed_pwd))
     user = cursor.fetchone()
     conn.close()
     return user
@@ -87,27 +90,6 @@ def save_to_db(usuario_id, pregunta, respuesta):
 
 # Inicializar Base de Datos
 init_db()
-
-@st.cache_resource(show_spinner="Indexando documentos (esto puede tardar la primera vez)...")
-def load_and_index_pdfs():
-    pdf_files = glob.glob("*.pdf")
-    documents = []
-    for pdf_file in pdf_files:
-        try:
-            loader = PyPDFLoader(pdf_file)
-            documents.extend(loader.load())
-        except Exception as e:
-            st.warning(f"Error cargando {pdf_file}: {e}")
-    
-    if not documents:
-        return None
-
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-    splits = text_splitter.split_documents(documents)
-    
-    embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-    vectorstore = FAISS.from_documents(splits, embeddings)
-    return vectorstore
 
 st.title("🛡️ Tutor IA: Ciberseguridad")
 
@@ -146,37 +128,156 @@ with st.sidebar:
                     if user:
                         st.session_state['user_id'] = user[0]
                         st.session_state['user_name'] = user[1]
+                        st.session_state['user_rol'] = user[2]
                         st.success("Acceso concedido.")
                         st.rerun()
                     else:
                         st.error("Credenciales incorrectas.")
     else:
-        st.success(f"Sesión iniciada como:\n**{st.session_state['user_name']}**")
+        st.success(f"Sesión iniciada como:\n**{st.session_state['user_name']}**\n*(Rol: {st.session_state.get('user_rol', 'alumno')})*")
         if st.button("Cerrar Sesión"):
-            del st.session_state['user_id']
-            del st.session_state['user_name']
-            if "messages" in st.session_state:
-                del st.session_state["messages"]
+            for key in ['user_id', 'user_name', 'user_rol', 'messages']:
+                if key in st.session_state:
+                    del st.session_state[key]
             st.rerun()
-            
-    st.divider()
-    st.header("Configuración del Tutor")
-    st.write("El API Key se carga automáticamente desde el archivo clave.env.")
-    
-    api_key_env = os.environ.get("GOOGLE_API_KEY", "")
-    api_key = st.text_input("Ingresa tu GOOGLE_API_KEY (Gemini)", value=api_key_env, type="password")
-    
-    if api_key:
-        os.environ["GOOGLE_API_KEY"] = api_key
-    else:
-        st.warning("No se encontró la API Key en clave.env ni ha sido ingresada.")
 
 # Flujo Principal
 if 'user_id' not in st.session_state:
     st.info("👋 ¡Bienvenido al portal del Tutor IA de Ciberseguridad!\n\nPor favor, **inicia sesión** o **regístrate** en el menú lateral izquierdo para comenzar a chatear.")
     st.stop()
 
-st.markdown(f"¡Hola de nuevo, {st.session_state['user_name']}! Pregúntame sobre los temas del curso.")
+st.markdown(f"¡Hola de nuevo, {st.session_state['user_name']}!")
+
+# --------------------------------------------------------------------------------
+# PANEL DE PROFESOR (Aislado de cualquier librería de IA)
+# --------------------------------------------------------------------------------
+if st.session_state.get('user_rol') == 'profesor':
+    st.header("📋 Panel de Seguimiento")
+    st.write("Visualización de métricas y consultas de los alumnos.")
+    
+    # Creamos las dos pestañas solicitadas
+    tab1, tab2 = st.tabs(["Listado de Usuarios", "Historial de Consultas"])
+    
+    with tab1:
+        conn = sqlite3.connect(DB_NAME)
+        df_users = pd.read_sql_query("SELECT id, nombre, email, rol FROM usuarios", conn)
+        conn.close()
+        st.dataframe(df_users, use_container_width=True)
+        
+    with tab2:
+        conn = sqlite3.connect(DB_NAME)
+        query = '''
+            SELECT h.fecha as Fecha, u.nombre as Alumno, h.pregunta_alumno as Pregunta, h.respuesta_tutor as 'Respuesta de la IA'
+            FROM historial h
+            JOIN usuarios u ON h.usuario_id = u.id
+            ORDER BY h.fecha DESC
+        '''
+        df_history = pd.read_sql_query(query, conn)
+        conn.close()
+        
+        if not df_history.empty:
+            df_clean = df_history.astype(str)
+            st.dataframe(df_clean, use_container_width=True)
+        else:
+            st.info("Aún no hay actividad de alumnos registrada.")
+            
+    # Finaliza la ejecución para el profesor, garantizando que el resto del código (IA) NO se evalúe ni cargue en memoria.
+    st.stop()
+
+
+# --------------------------------------------------------------------------------
+# PANEL DE ALUMNO (Carga las librerías de IA bajo demanda)
+# --------------------------------------------------------------------------------
+st.markdown("Pregúntame sobre los temas del curso.")
+
+with st.spinner("Cargando librerías de Inteligencia Artificial..."):
+    # Movimos TODAS las importaciones de IA aquí para que solo ocurran si el usuario es un alumno.
+    from langchain_community.document_loaders import PyPDFLoader
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+    from langchain_community.vectorstores import FAISS
+    from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+    from langchain_core.prompts import ChatPromptTemplate
+    from langchain_core.runnables import RunnablePassthrough
+    from langchain_core.output_parsers import StrOutputParser
+
+@st.cache_resource(show_spinner="Indexando documentos (esto puede tardar la primera vez)...")
+def load_and_index_pdfs():
+    pdf_files = glob.glob("*.pdf")
+    documents = []
+    for pdf_file in pdf_files:
+        try:
+            loader = PyPDFLoader(pdf_file)
+            documents.extend(loader.load())
+        except Exception as e:
+            st.warning(f"Error cargando {pdf_file}: {e}")
+    
+    if not documents:
+        return None
+
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+    splits = text_splitter.split_documents(documents)
+    
+    embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-2")
+    
+    import time
+    vectorstore = None
+    
+    progress_text = "Indexando documentos (evitando límites de API)..."
+    progress_bar = st.progress(0, text=progress_text)
+    
+    # Procesar en lotes para no saturar la API
+    batch_size = 25
+    
+    for i in range(0, len(splits), batch_size):
+        batch = splits[i:i+batch_size]
+        
+        retries = 3
+        while retries > 0:
+            try:
+                # 1. Extraemos textos y metadatos para controlar nosotros mismos el proceso
+                texts = [doc.page_content for doc in batch]
+                metadatas = [doc.metadata for doc in batch]
+                
+                # 2. Llamada nativa a la API para forzar que devuelva la lista correcta de embeddings
+                import google.generativeai as genai
+                genai.configure(api_key=os.environ["GOOGLE_API_KEY"])
+                res = genai.embed_content(model="models/gemini-embedding-2", content=texts)
+                batch_embeddings = res["embedding"]
+                
+                # 3. Verificamos que la longitud coincida (Solución al ValueError)
+                if len(texts) != len(batch_embeddings):
+                    raise ValueError(f"Desajuste: documents={len(texts)}, embeddings={len(batch_embeddings)}")
+                
+                # 4. Inyectamos en FAISS manualmente emparejando texto y vector
+                text_embeddings = list(zip(texts, batch_embeddings))
+                batch_vectorstore = FAISS.from_embeddings(text_embeddings, embeddings, metadatas=metadatas)
+                
+                if vectorstore is None:
+                    vectorstore = batch_vectorstore
+                else:
+                    vectorstore.merge_from(batch_vectorstore)
+                    
+                break # Si tiene éxito, salir del bucle de reintento
+                
+            except Exception as e:
+                if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                    time.sleep(15) # Esperar 15 segundos extra si la cuota explota
+                    retries -= 1
+                else:
+                    # Robustez solicitada: atrapar error, no crashear, y decir qué documento falló
+                    source_doc = batch[0].metadata.get('source', 'Desconocido') if batch else 'Desconocido'
+                    st.warning(f"Error procesando lote cerca del documento '{source_doc}'. Detalle: {str(e)}")
+                    break # Abortar este lote específico y seguir con el siguiente
+                    
+        # Respetar el límite de 15 Requests Per Minute (~4 segundos por request)
+        time.sleep(4)
+        
+        # Actualizar progreso en la UI
+        current_progress = min(1.0, (i + batch_size) / len(splits))
+        progress_bar.progress(current_progress, text=f"Indexando conocimiento: {min(i + batch_size, len(splits))} de {len(splits)} fragmentos...")
+
+    progress_bar.empty()
+    return vectorstore
 
 # Cargar el conocimiento (RAG)
 vectorstore = load_and_index_pdfs()
@@ -188,7 +289,6 @@ if vectorstore is None:
 retriever = vectorstore.as_retriever()
 
 # Configurar LLM usando Gemini
-# Usamos el modelo rápido y eficiente (Gemini 2.5 Flash)
 llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.2)
 
 system_prompt = (
