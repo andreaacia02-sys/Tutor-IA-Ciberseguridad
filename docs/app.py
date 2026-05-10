@@ -16,7 +16,7 @@ if not api_key_env:
     st.error("Error de configuración del servidor.")
     st.stop()
 
-st.set_page_config(page_title="Tutor IA: Ciberseguridad", page_icon="🛡️")
+st.set_page_config(page_title="Tutor IA: Ciberseguridad", page_icon="🛡️", initial_sidebar_state="expanded")
 
 # Configuración de Base de Datos
 DB_NAME = "database.db"
@@ -91,7 +91,101 @@ def save_to_db(usuario_id, pregunta, respuesta):
 # Inicializar Base de Datos
 init_db()
 
-st.title("🛡️ Tutor IA: Ciberseguridad")
+st.markdown("""
+<style>
+    /* 1. Fondo general: Gradiente suave Azul Cielo y Lavanda */
+    .stApp {
+        background: linear-gradient(135deg, #E0F2FE 0%, #F5F3FF 100%) !important;
+        color: #1E293B !important; /* Gris oscuro para lectura fácil */
+    }
+    
+    /* 2. Títulos y textos generales (Protegiendo iconos) */
+    h1, h2, h3, h4, h5, h6 {
+        font-family: 'Courier New', Courier, monospace !important;
+        color: #F472B6 !important;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+
+    /* Aplicar fuente a textos, pero EXCLUIR los iconos de Material Design */
+    p, label, span:not(.material-icons):not(.notranslate) {
+        font-family: 'Courier New', Courier, monospace !important;
+        color: #334155 !important;
+    }
+    
+    /* 3. Sidebar: Gris claro profesional */
+    [data-testid="stSidebar"] {
+        background-color: #F1F5F9 !important;
+        border-right: 1px solid #E2E8F0 !important;
+    }
+
+
+    /* 4. Botones: Rosa Chicle Vibrante con Texto Blanco */
+    .stButton > button {
+        background-color: #F472B6 !important;
+        color: #FFFFFF !important;
+        border: none !important;
+        border-radius: 8px !important;
+        padding: 0.5rem 2rem !important;
+        transition: all 0.3s ease !important;
+        font-weight: bold !important;
+        box-shadow: 0 4px 6px -1px rgba(244, 114, 182, 0.3) !important;
+    }
+
+    .stButton > button:hover {
+        background-color: #DB2777 !important; /* Un rosa un poco más oscuro al pasar el ratón */
+        box-shadow: 0 10px 15px -3px rgba(244, 114, 182, 0.4) !important;
+        transform: translateY(-1px);
+    }
+    
+    /* 5. Inputs (Email, Contraseña, Chat): Blancos y limpios */
+    input, textarea, [data-testid="stChatInput"] {
+        background-color: #FFFFFF !important;
+        color: #1E293B !important;
+        border: 1px solid #E2E8F0 !important;
+        border-radius: 8px !important;
+    }
+
+    input:focus, textarea:focus {
+        border-color: #38BDF8 !important; /* Azul brillante al escribir */
+        box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2) !important;
+    }
+    
+    /* 6. Burbujas de Chat y Formularios: Estilo "Glassmorphism" */
+    [data-testid="stForm"], .stChatMessage {
+        border: 1px solid rgba(255, 255, 255, 0.6) !important;
+        background-color: rgba(255, 255, 255, 0.7) !important;
+        backdrop-filter: blur(10px);
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+        border-radius: 12px !important;
+    }
+
+    /* 7. Pestañas y selectores: Rosa y Azul */
+    .stTabs [aria-selected="true"] {
+        color: #F472B6 !important;
+        border-bottom: 2px solid #F472B6 !important;
+    }
+
+    /* Control de la barra lateral (flechita) */
+    [data-testid="collapsedControl"] {
+        color: #F472B6 !important;
+        background-color: #FFFFFF !important;
+    }
+</style>
+
+""", unsafe_allow_html=True)
+
+st.markdown(r"""
+<div style="text-align: center; color: #F472B6; text-shadow: 0 0 5px #F472B6; font-family: monospace; white-space: pre; font-size: 14px; font-weight: bold;">
+  _____            _             ___  ___ 
+ |_   _|   _ | |_  ___  _ _   |_ _||   \
+   | |  | || ||  _|/ _ \| '_|   | | | |) |
+   |_|   \_,_| \__|\___/|_|    |___||___/ 
+                                          
+      C I B E R S E G U R I D A D         
+</div>
+<hr style="border-top: 1px dashed #F472B6;">
+""", unsafe_allow_html=True)
 
 # Sidebar de Autenticación y Configuración
 with st.sidebar:
