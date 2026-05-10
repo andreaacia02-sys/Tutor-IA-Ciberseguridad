@@ -1,0 +1,6 @@
+*.png
+*.jpg
+*.jpeg
+database.db
+clave.env
+__pycache__/
