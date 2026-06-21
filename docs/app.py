@@ -6,6 +6,27 @@ import hashlib
 from datetime import datetime
 from dotenv import load_dotenv
 import pandas as pd
+import requests
+
+# Función global para conectar con Make
+def enviar_resumen_por_email(email_alumno, nombre_alumno, texto_resumen):
+    MAKE_WEBHOOK_URL = os.getenv("MAKE_WEBHOOK_URL", "https://hook.eu1.make.com/v6993o44itau6f4hpmntcdnp2s6i1dpg")
+    
+    payload = {
+        "email": email_alumno,
+        "nombre": nombre_alumno,
+        "resumen": texto_resumen
+    }
+    
+    try:
+        response = requests.post(MAKE_WEBHOOK_URL, json=payload)
+        if response.status_code == 200:
+            return True
+        return False
+    except Exception as e:
+        print(f"Error enviando a Make: {e}")
+        return False
+
 
 # Cargar variables de entorno
 load_dotenv("clave.env")
@@ -90,6 +111,7 @@ def save_to_db(usuario_id, pregunta, respuesta):
 
 # Inicializar Base de Datos
 init_db()
+
 
 st.markdown("""
 <style>
@@ -223,6 +245,7 @@ with st.sidebar:
                         st.session_state['user_id'] = user[0]
                         st.session_state['user_name'] = user[1]
                         st.session_state['user_rol'] = user[2]
+                        st.session_state['user_email'] = login_email  # <-- ¡ESTA LÍNEA ES CLAVE!
                         st.success("Acceso concedido.")
                         st.rerun()
                     else:
@@ -230,10 +253,19 @@ with st.sidebar:
     else:
         st.success(f"Sesión iniciada como:\n**{st.session_state['user_name']}**\n*(Rol: {st.session_state.get('user_rol', 'alumno')})*")
         if st.button("Cerrar Sesión"):
-            for key in ['user_id', 'user_name', 'user_rol', 'messages']:
+            for key in ['user_id', 'user_name', 'user_rol', 'messages', 'student_nav']:
                 if key in st.session_state:
                     del st.session_state[key]
             st.rerun()
+        
+        # Selector de navegación para el alumno
+        if st.session_state.get('user_rol', 'alumno') == 'alumno':
+            st.write("---")
+            st.radio(
+                "Menú de Navegación",
+                ["💬 Chat con el Tutor", "📚 Biblioteca y Resúmenes"],
+                key="student_nav"
+            )
 
 # Flujo Principal
 if 'user_id' not in st.session_state:
@@ -282,8 +314,6 @@ if st.session_state.get('user_rol') == 'profesor':
 # --------------------------------------------------------------------------------
 # PANEL DE ALUMNO (Carga las librerías de IA bajo demanda)
 # --------------------------------------------------------------------------------
-st.markdown("Pregúntame sobre los temas del curso.")
-
 with st.spinner("Cargando librerías de Inteligencia Artificial..."):
     # Movimos TODAS las importaciones de IA aquí para que solo ocurran si el usuario es un alumno.
     from langchain_community.document_loaders import PyPDFLoader
@@ -403,37 +433,114 @@ prompt = ChatPromptTemplate.from_messages([
 def format_docs(docs):
     return "\n\n".join(doc.page_content for doc in docs)
 
+# Función helper para extraer la query de forma segura si se pasa un diccionario o string
+def obtener_texto_query(x):
+    if isinstance(x, dict):
+        return x.get("input", x.get("question", x.get("query", "")))
+    return str(x)
+
 rag_chain = (
-    {"context": retriever | format_docs, "input": RunnablePassthrough()}
+    {"context": obtener_texto_query | retriever | format_docs, "input": obtener_texto_query}
     | prompt
     | llm
     | StrOutputParser()
 )
 
-# Inicializar el estado de la sesión para el historial de chat de la UI
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+# Obtener la navegación del alumno
+nav_option = st.session_state.get('student_nav', '💬 Chat con el Tutor')
 
-# Mostrar mensajes anteriores en la UI
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+if nav_option == "💬 Chat con el Tutor":
+    st.markdown("Pregúntame sobre los temas del curso.")
+    
+    # Inicializar el estado de la sesión para el historial de chat de la UI
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
 
-# Interfaz de entrada del chat
-if user_input := st.chat_input("Escribe tu pregunta sobre ciberseguridad aquí..."):
-    # Mostrar mensaje del usuario
-    st.chat_message("user").markdown(user_input)
-    st.session_state.messages.append({"role": "user", "content": user_input})
+    # Mostrar mensajes anteriores en la UI
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
 
-    # Mostrar respuesta del asistente
-    with st.chat_message("assistant"):
-        with st.spinner("Consultando la base de conocimiento oficial..."):
+    # Interfaz de entrada del chat sin comando /resumen
+    if user_input := st.chat_input("Escribe tu pregunta sobre ciberseguridad aquí..."):
+        # Mostrar mensaje del usuario en la interfaz
+        st.chat_message("user").markdown(user_input)
+        st.session_state.messages.append({"role": "user", "content": user_input})
+
+        with st.chat_message("assistant"):
+            with st.spinner("Consultando la base de conocimiento oficial..."):
+                try:
+                    answer = rag_chain.invoke(user_input)
+                    st.markdown(answer)
+                    st.session_state.messages.append({"role": "assistant", "content": answer})
+                    # Guardar en SQLite con el ID del usuario
+                    save_to_db(st.session_state['user_id'], user_input, answer)
+                except Exception as e:
+                    st.error(f"Error de conexión con el modelo: {str(e)}")
+
+elif nav_option == "📚 Biblioteca y Resúmenes":
+    st.header("📚 Biblioteca de Apuntes")
+    st.write("Aquí puedes descargar los documentos oficiales del curso o solicitar un resumen estructurado por correo electrónico.")
+    
+    pdf_files = glob.glob("*.pdf")
+    
+    if not pdf_files:
+        st.info("No se encontraron documentos PDF en el directorio del curso.")
+    else:
+        for idx, pdf_file in enumerate(sorted(pdf_files)):
             try:
-                answer = rag_chain.invoke(user_input)
-                st.markdown(answer)
-                st.session_state.messages.append({"role": "assistant", "content": answer})
+                size_bytes = os.path.getsize(pdf_file)
+                size_kb = size_bytes / 1024
+                size_str = f"{size_kb:.1f} KB" if size_kb < 1024 else f"{size_kb/1024:.1f} MB"
+            except Exception:
+                size_str = "Tamaño desconocido"
+            
+            with st.container():
+                st.markdown(f"### 📄 {pdf_file}  `({size_str})`")
                 
-                # Guardar en SQLite (Requisito) con el ID del usuario
-                save_to_db(st.session_state['user_id'], user_input, answer)
-            except Exception as e:
-                st.error(f"Error de conexión con el modelo: {str(e)}")
+                col1, col2 = st.columns([1, 2])
+                
+                with col1:
+                    try:
+                        with open(pdf_file, "rb") as f:
+                            pdf_data = f.read()
+                        st.download_button(
+                            label="⬇️ Descargar PDF",
+                            data=pdf_data,
+                            file_name=pdf_file,
+                            mime="application/pdf",
+                            key=f"download_{idx}_{pdf_file}"
+                        )
+                    except Exception as e:
+                        st.error(f"Error al leer el archivo para descarga: {e}")
+                        
+                with col2:
+                    if st.button("Solicitar Resumen por Email", key=f"res_{pdf_file}"):
+                        with st.spinner("Generando resumen..."):
+                            try:
+                                # 1. Creamos la petición en el formato de diccionario con la clave exacta que exige la cadena ("question")
+                                peticion_dict = {"question": f"Por favor, haz un resumen detallado, estructurado y educativo basado en el documento: {pdf_file}"}
+                                
+                                # 2. Invocamos la cadena original pasándole el diccionario correcto
+                                answer = rag_chain.invoke(peticion_dict)
+                                
+                                # 3. Convertimos la respuesta en un string limpio y quitamos espacios en blanco
+                                texto_final_resumen = str(answer).strip()
+                                
+                                # 4. Validamos que no esté vacío y disparamos a Make
+                                if texto_final_resumen and len(texto_final_resumen) > 10:
+                                    email_actual = st.session_state.get('user_email', 'alumno@correo.com')
+                                    nombre_actual = st.session_state.get('user_name', 'Alumno')
+                                    
+                                    exito = enviar_resumen_por_email(email_actual, nombre_actual, texto_final_resumen)
+                                    
+                                    if exito:
+                                        st.success(f"¡Resumen enviado con éxito por email a {email_actual}!")
+                                    else:
+                                        st.error("El resumen se generó pero hubo un problema al conectarse con Make. Comprueba la URL de tu webhook.")
+                                else:
+                                    st.error("El modelo devolvió una respuesta vacía o con un formato incorrecto.")
+                                    
+                            except Exception as e:
+                                st.error(f"Error al invocar el modelo RAG: {str(e)}")
+            st.write("---")
